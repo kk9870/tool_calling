@@ -1,0 +1,47 @@
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.Statement;
+import java.util.ArrayList;
+
+public class UserService {
+
+    private static ArrayList<String> users = new ArrayList<>(); // Not thread-safe
+
+    public static void main(String[] args) {
+        String dbUrl = "jdbc:mysql://localhost:3306/testdb";
+        String user = "admin";
+        String pass = "admin123"; // Hardcoded credentials
+
+        try {
+            Connection conn = DriverManager.getConnection(dbUrl, user, pass);
+            Statement stmt = conn.createStatement();
+
+            String userInput = "' OR '1'='1";
+            String sql = "SELECT * FROM users WHERE username = '" + userInput + "'"; // SQL Injection risk
+            ResultSet rs = stmt.executeQuery(sql);
+
+            while (rs.next()) {
+                String username = rs.getString("username");
+                users.add(username); // Adding duplicates without validation
+            }
+
+            for (int i = 0; i < users.size(); i++) {
+                for (int j = 0; j < users.size(); j++) {
+                    if (i != j && users.get(i).equals(users.get(j))) {
+                        System.out.println("Duplicate found: " + users.get(i));
+                    }
+                }
+            }
+
+            // No proper cleanup of resources
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static void addUser(String username) {
+        users.add(username); // Not synchronized
+    }
+}

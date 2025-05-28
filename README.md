@@ -1,6 +1,6 @@
 # Code Review Implementation Examples
 
-This repository demonstrates different approaches to implementing code review functionality using the Gemini API, highlighting the differences between function calling and non-function calling implementations.
+This repository demonstrates different approaches to implementing code review functionality using the Azure OpenAI API, highlighting the differences between function calling and non-function calling implementations.
 
 ## Overview
 

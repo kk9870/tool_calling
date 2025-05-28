@@ -3,10 +3,11 @@ import os
 from typing import Dict, Any, List, Optional
 from enum import Enum
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import ChatPromptTemplate
 import logging
-
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uvicorn
+from langchain_openai import AzureChatOpenAI
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -15,17 +16,23 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Load the API key from the environment variable
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
 
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is not set. Please check your .env file.")
+if not AZURE_OPENAI_API_KEY :
+    raise ValueError("AZURE_OPENAI_API_KEY environment variable is not set. Please check your .env file.")
 
+app = FastAPI()
+
+class CodeAnalysisRequest(BaseModel):
+    user_instruction: str
 
 class AnalysisType(Enum):
     REVIEW = "review"
     EXPLANATION = "explanation"
     BOTH = "both"
-
 
 def code_review_function():
     return {
@@ -35,17 +42,6 @@ def code_review_function():
             "type": "object",
             "properties": {
                 "codeIssues": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "issueType": {"type": "string"},
-                            "description": {"type": "string"},
-                            "criticalityLevel": {"type": "integer"}
-                        }
-                    }
-                },
-                "performanceOptimizationIssues": {
                     "type": "array",
                     "items": {
                         "type": "object",
@@ -67,17 +63,6 @@ def code_review_function():
                         }
                     }
                 },
-                "scalabilityIssues": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "issueType": {"type": "string"},
-                            "description": {"type": "string"},
-                            "criticalityLevel": {"type": "integer"}
-                        }
-                    }
-                },
                 "engineeringPracticesIssues": {
                     "type": "array",
                     "items": {
@@ -88,12 +73,11 @@ def code_review_function():
                             "criticalityLevel": {"type": "integer"}
                         }
                     }
-                },
-                "refactoredCode": {"type": "string"}
-            }
+                }
+            },
+            "required": ["codeIssues", "securityVulnerabilityIssues", "engineeringPracticesIssues"]
         }
     }
-
 
 def code_explanation_function():
     return {
@@ -119,13 +103,13 @@ def code_explanation_function():
                     "type": "array",
                     "items": {"type": "string"}
                 }
-            }
+            },
+            "required": ["purpose", "components", "algorithm", "complexity", "edgeCases"]
         }
     }
 
 def format_response(response: Dict[str, Any], analysis_type: AnalysisType) -> str:
     return json.dumps(response, indent=2)
-
 
 async def analyze_code_auto(code: str, user_instruction: str) -> str:
     """
@@ -137,28 +121,32 @@ async def analyze_code_auto(code: str, user_instruction: str) -> str:
         logger.info("The LLM will determine whether to review, explain, or do both.")
         logger.info("=" * 50)
 
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=GEMINI_API_KEY,
-            streaming=True
+        llm = AzureChatOpenAI(
+            openai_api_version=AZURE_OPENAI_API_VERSION,
+            azure_deployment=AZURE_OPENAI_DEPLOYMENT_NAME,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            api_key=AZURE_OPENAI_API_KEY,
+            temperature=0.9,  # Higher temperature for more creative problem generation
         )
 
         full_prompt = (
             f"You are an expert code reviewer and programmer.\n\n"
             f"User request: {user_instruction}\n\n"
             f"Code:\n{code}\n\n"
-            "Based on the user request, either:\n"
-            "- Review the code and return issues\n"
-            "- Explain the code in detail\n"
-            "- Or do both\n"
-            "Use only structured function calling to respond appropriately. Response must follow JSON format using the defined functions."
+            "Based on the user request, you MUST use function calling to respond. "
+            "Do not return any other format. Use either code_review or code_explanation function "
+            "based on the user's intent."
         )
 
         functions = [code_review_function(), code_explanation_function()]
-        llm = llm.bind(functions=functions)
+        
+        # Configure the model with function calling
+        llm = llm.bind(
+            functions=functions
+        )
 
         messages = [
-            {"role": "system", "content": "You are an expert code reviewer and explainer. Use function calling based on user's intent."},
+            {"role": "system", "content": "You are an expert code reviewer and explainer. You MUST use function calling to respond."},
             {"role": "user", "content": full_prompt}
         ]
 
@@ -173,71 +161,28 @@ async def analyze_code_auto(code: str, user_instruction: str) -> str:
             return format_response({
                 "response": result,
                 "function_called": function_call["name"],
-                "parsing_required": False,
-                "automatic_intent_detection": True
-            }, AnalysisType.BOTH)
-
-        elif hasattr(response, "tool_calls") and response.tool_calls:
-            review_result = None
-            explanation_result = None
-
-            for tool_call in response.tool_calls:
-                name = tool_call.get("name")
-                args = tool_call.get("args")
-                if name == "code_review":
-                    review_result = args
-                elif name == "code_explanation":
-                    explanation_result = args
-
-            logger.info("Received multiple tool call responses.")
-            return format_response({
-                "response": {
-                    "review": review_result,
-                    "explanation": explanation_result
-                },
-                "function_called": "both",
-                "parsing_required": False,
-                "automatic_intent_detection": True
             }, AnalysisType.BOTH)
 
         logger.warning("No valid function call response received")
         return format_response({
-            "error": "No valid analysis result found",
-            "automatic_intent_detection": True,
-            "parsing_failed": True
+            "error": "No valid analysis result found"
         }, AnalysisType.BOTH)
 
     except Exception as e:
         logger.error(f"Error in code analysis: {str(e)}")
         return format_response({
-            "error": f"Error in code analysis: {str(e)}",
-            "automatic_intent_detection": True,
-            "parsing_failed": True
+            "error": f"Error in code analysis: {str(e)}"
         }, AnalysisType.BOTH)
 
+@app.post("/analyze-code")
+async def analyze_code_endpoint(request: CodeAnalysisRequest):
+    try:
+        with open("sample_code.txt", "r") as file:
+            sample_code = file.read()
+        result = await analyze_code_auto(sample_code, request.user_instruction)
+        return json.loads(result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Example usage
 if __name__ == "__main__":
-    import asyncio
-    async def main():
-        sample_code = """
-            def calculate_sum(numbers):
-                total = 0
-                for i in range(len(numbers)):
-                    total += numbers[i]
-                return total
-            """
-
-        user_inputs = [
-            "Please review this code for potential issues",
-            "Can you explain how this code works?",
-            "Give both a review and an explanation of this code"
-        ]
-
-        for i, user_input in enumerate(user_inputs, start=1):
-            logger.info(f"\n=== Example {i}: {user_input} ===")
-            result = await analyze_code_auto(sample_code, user_input)
-            logger.info("\nFinal Result:")
-            logger.info(result)
-
-    asyncio.run(main())
+    uvicorn.run(app, host="0.0.0.0", port=8000)

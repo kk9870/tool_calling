@@ -2,9 +2,9 @@ import json
 import os
 from typing import Dict, Any
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.prompts import ChatPromptTemplate
 import logging
+
+from langchain_openai import AzureChatOpenAI
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -14,10 +14,13 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Load the API key from the environment variable
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
 
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is not set. Please check your .env file.")
+if not AZURE_OPENAI_API_KEY :
+    raise ValueError("AZURE_OPENAI_API_KEY environment variable is not set. Please check your .env file.")
 
 
 def code_review_function():
@@ -154,10 +157,12 @@ async def review_code(code: str) -> str:
         logger.info("No manual parsing required")
 
         prompt = create_code_review_prompt(code)
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=GEMINI_API_KEY,
-            streaming=True
+        llm = AzureChatOpenAI(
+            openai_api_version=AZURE_OPENAI_API_VERSION,
+            azure_deployment=AZURE_OPENAI_DEPLOYMENT_NAME,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            api_key=AZURE_OPENAI_API_KEY,
+            temperature=0.9,  # Higher temperature for more creative problem generation
         )
 
         functions = [code_review_function()]

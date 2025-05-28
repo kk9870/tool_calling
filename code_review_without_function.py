@@ -2,9 +2,9 @@ import json
 import os
 import re
 import logging
-import google.generativeai as genai
+import asyncio
 from dotenv import load_dotenv
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+from langchain_openai import AzureChatOpenAI
 
 # Set up logger
 logging.basicConfig(level=logging.INFO)
@@ -14,11 +14,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Load the API key from the environment variable
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
 
-def get_code_review(code):
+async def get_code_review(code):
     try:
         prompt = (
             f"Act as an expert code reviewer. Analyze the following code:\n\n{code}\n\n"
@@ -44,64 +45,58 @@ def get_code_review(code):
             '  "documentationIssues": [\n'
             '    {"issueDescription": "Missing docstrings for public functions"}\n'
             "  ],\n"
-            '  "reviewScore": 72.5%,\n'
+            '  "reviewScore": 72.5,\n'
             '  "refactoredCode": "Only the refactored code here. No markdown, no explanation."\n'
             "}\n"
             "If no issues are found in a section, return an empty array for that parameter."
         )
 
-        response = model.generate_content(
-            prompt,
-            safety_settings={
-                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            },
+
+        llm = AzureChatOpenAI(
+            openai_api_version=AZURE_OPENAI_API_VERSION,
+            azure_deployment=AZURE_OPENAI_DEPLOYMENT_NAME,
+            azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            api_key=AZURE_OPENAI_API_KEY,
+            temperature=0.9,  # Higher temperature for more creative problem generation
         )
 
+        messages = [
+            {"role": "system", "content": "You are an expert code reviewer."},
+            {"role": "user", "content": prompt}
+        ]
+
+        logger.info("Sending request to LLM...")
+        response = await llm.ainvoke(messages)
+
         logger.info("Raw Response from LLM:")
-        logger.info(response.text)
-        logger.info("Trying to parse JSON response...")
+        logger.info(response)
 
-        if response and response.parts:
-            generated_review = response.parts[0].text
-
-            json_match = re.search(
-                r'\{.*"refactoredCode":', generated_review, re.DOTALL
-            )
-
-            if json_match:
-                json_str = json_match.group() + '""}'
-
-
-                try:
-                    review_dict = json.loads(json_str)
-                    refactored_code_match = re.search(
-                        r'"refactoredCode":(.*)$', generated_review, re.DOTALL
-                    )
-                    if refactored_code_match:
-                        refactored_code = refactored_code_match.group(1).strip()[1:-1]
-                        review_dict["refactoredCode"] = refactored_code.replace("\\n", "\n")
-
-                    logger.info("Successfully parsed JSON response!")
-                    return {
-                        "response": review_dict
-                    }
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON parsing error: {str(e)}")
-                    return {
-                        "error": "Error decoding JSON response",
-                        "raw_response": json_str
-                    }
-            else:
-                logger.warning("No JSON structure found in response")
+        if response and hasattr(response, 'content'):
+            try:
+                # Extract JSON from the response content
+                content = response.content.strip()
+                # Remove any markdown code block markers if present
+                if content.startswith('```json'):
+                    content = content[7:-3]  # Remove ```json and ``` markers
+                elif content.startswith('```'):
+                    content = content[3:-3]  # Remove ``` markers
+                
+                # Parse the JSON response
+                review_dict = json.loads(content)
+                logger.info("Successfully parsed JSON response!")
                 return {
-                    "error": "No JSON found in response",
-                    "raw_response": generated_review
+                    "response": review_dict
+                }
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing error: {str(e)}")
+                return {
+                    "error": "Error decoding JSON response",
+                    "raw_response": content
                 }
         else:
-            logger.error("No response parts found")
+            logger.error("Invalid response format")
             return {
-                "error": "Unexpected response format",
+                "error": "Invalid response format",
                 "raw_response": str(response)
             }
 
@@ -113,15 +108,19 @@ def get_code_review(code):
 
 # Example usage
 if __name__ == "__main__":
-    with open("sample_code.txt", "r") as file:
-        sample_code = file.read()
+    async def main():
+        with open("sample_code.txt", "r") as file:
+            sample_code = file.read()
 
-    logger.info("=== Code Review Without Function Calling ===")
-    logger.info("This approach requires manual JSON parsing and handling")
-    logger.info("The response might not always be in the expected format")
-    logger.info("We need to handle various edge cases and parsing errors")
-    logger.info("=" * 50)
+        logger.info("=== Code Review Without Function Calling ===")
+        logger.info("This approach requires manual JSON parsing and handling")
+        logger.info("The response might not always be in the expected format")
+        logger.info("We need to handle various edge cases and parsing errors")
+        logger.info("=" * 50)
 
-    review_result = get_code_review(sample_code)
-    logger.info("Final Result:")
-    logger.info(json.dumps(review_result, indent=2))
+        review_result = await get_code_review(sample_code)
+        logger.info("Final Result:")
+        logger.info(json.dumps(review_result, indent=2))
+
+    # Run the async main function
+    asyncio.run(main())

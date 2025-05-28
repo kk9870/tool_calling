@@ -53,9 +53,12 @@ The repository contains three main implementations:
 pip install -r requirements.txt
 ```
 
-2. Create a `.env` file with your Gemini API key:
+2. Create a `.env` file with your Azure OpenAI credentials:
 ```
-GEMINI_API_KEY=your_api_key_here
+AZURE_OPENAI_API_KEY
+AZURE_OPENAI_ENDPOINT
+AZURE_OPENAI_DEPLOYMENT_NAME
+AZURE_OPENAI_API_VERSION
 ```
 
 
